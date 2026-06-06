@@ -1,0 +1,5 @@
+# 将训练好的 .tflite 模型放此处即可离线加载
+# 文件名任意，需配套 labels.txt
+# 示例:
+#   best_int8.tflite
+#   labels.txt

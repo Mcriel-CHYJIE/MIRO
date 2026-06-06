@@ -1,0 +1,26 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+/app/build
+/app/release
+*.apk
+*.aab
+*.tflite
+*.onnx
+__pycache__
+*.pyc
+model_export/__pycache__
+build_app.bat
+/debug.keystore
+ncnn/
+
+# Legacy NCNN (migrated to TFLite)
+app/src/main/jniLibs/
+app/src/main/jni/
