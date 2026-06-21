@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,6 +52,7 @@ fun LogPanel(
                 Text("暂无检测数据", fontSize = 12.sp, color = t.textDim)
             }
         } else {
+            SelectionContainer {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 4.dp)
@@ -64,6 +66,7 @@ fun LogPanel(
                         modifier = Modifier.padding(vertical = 1.dp)
                     )
                 }
+            }
             }
         }
     }

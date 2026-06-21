@@ -12,6 +12,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.animation.AnimatedVisibility
@@ -24,11 +26,15 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -36,6 +42,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
@@ -47,14 +54,17 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -86,6 +96,8 @@ fun RecordsTab(
     onDelete: (Uri) -> Unit
 ) {
     var selectedImage by remember { mutableStateOf<SavedImage?>(null) }
+    var isCardView by remember { mutableStateOf(true) }
+    val context = LocalContext.current
 
     var activeFilter by remember { mutableStateOf<String?>(null) }
 
@@ -120,6 +132,23 @@ fun RecordsTab(
                         .padding(end = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 视图切换
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { isCardView = !isCardView },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (isCardView) "▦" else "▣",
+                            color = Color(0xFF07C160),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                     // 快捷删除开关
                     Box(
                         modifier = Modifier
@@ -131,9 +160,9 @@ fun RecordsTab(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "快捷删除",
-                            tint = if (deleteMode) Color(0xFFE53935) else Color(0xFF555555),
+                            Icons.AutoMirrored.Filled.List,
+                            contentDescription = "批量操作",
+                            tint = if (deleteMode) Color(0xFF07C160) else Color(0xFF555555),
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -203,23 +232,101 @@ fun RecordsTab(
                         textAlign = TextAlign.Center
                     )
                 }
-            } else {
+            } else if (isCardView) {
+                val outerDragOffsetY = remember { Animatable(0f) }
+                var outerDragConsumed by remember { mutableStateOf(false) }
+                val outerThreshold = with(LocalDensity.current) { 100.dp.toPx() }
+                val outerProgress = (kotlin.math.abs(outerDragOffsetY.value) / outerThreshold).coerceIn(0f, 1f)
+                val outerDirection = when {
+                    outerDragOffsetY.value < -outerThreshold * 0.3f -> -1
+                    outerDragOffsetY.value > outerThreshold * 0.3f -> 1
+                    else -> 0
+                }
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
+                        .then(
+                            if (deleteMode) Modifier
+                                .offset { IntOffset(0, outerDragOffsetY.value.roundToInt()) }
+                                .alpha((1f - outerProgress * 0.5f).coerceIn(0.5f, 1f))
+                                .graphicsLayer {
+                                    scaleX = 1f - outerProgress * 0.05f
+                                    scaleY = 1f - outerProgress * 0.05f
+                                }
+                                .pointerInput(filteredImages) {
+                                detectVerticalDragGestures(
+                                    onDragEnd = {
+                                        if (!outerDragConsumed) {
+                                            when {
+                                                outerDragOffsetY.value > outerThreshold -> {
+                                                    outerDragConsumed = true
+                                                    val img = filteredImages.getOrNull(pagerState.currentPage)
+                                                    if (img != null) onDelete(img.uri)
+                                                }
+                                                outerDragOffsetY.value < -outerThreshold -> {
+                                                    outerDragConsumed = true
+                                                    val img = filteredImages.getOrNull(pagerState.currentPage)
+                                                    if (img != null) shareFile(context, img.uri)
+                                                }
+                                            }
+                                            }
+                                            scope.launch {
+                                                outerDragOffsetY.animateTo(0f, spring(
+                                                    dampingRatio = Spring.DampingRatioNoBouncy,
+                                                    stiffness = Spring.StiffnessMedium
+                                                ))
+                                                outerDragConsumed = false
+                                            }
+                                            },
+                                            onVerticalDrag = { _, dragAmount ->
+                                            scope.launch {
+                                            outerDragOffsetY.snapTo(
+                                                (outerDragOffsetY.value + dragAmount).coerceIn(-outerThreshold * 2, outerThreshold * 2)
+                                            )
+                                            }
+                                            }
+                                            )
+                            } else Modifier
+                        )
                 ) {
                     HorizontalPager(
                         state = pagerState,
                         modifier = Modifier.fillMaxSize()
                     ) { page ->
                         val img = filteredImages[page]
-                        PagerPage(
+                        key(img.uri) {
+                            PagerPage(
                             savedImage = img,
-                            onClick = { selectedImage = img },
-                            deleteMode = deleteMode,
-                            onDeleteRequest = { onDelete(img.uri) }
+                            onClick = { selectedImage = img }
                         )
+                        }
+                    }
+
+                    // 拖拽方向提示
+                    if (outerProgress > 0.1f) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = if (outerDirection < 0) Alignment.TopCenter else Alignment.BottomCenter
+                        ) {
+                            Text(
+                                text = when {
+                                    outerDirection < 0 -> "▲ 分享"
+                                    outerDirection > 0 -> "▼ 删除"
+                                    else -> ""
+                                },
+                                color = when {
+                                    outerDirection < 0 -> Color(0xFF07C160)
+                                    outerDirection > 0 -> Color(0xFFE53935)
+                                    else -> Color.Transparent
+                                },
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .background(Color(0xCC1E1E1E), RoundedCornerShape(8.dp))
+                                    .padding(horizontal = 14.dp, vertical = 6.dp)
+                            )
+                        }
                     }
                 }
 
@@ -264,6 +371,24 @@ fun RecordsTab(
                             tint = Color(0xFFE53935),
                             modifier = Modifier.size(20.dp)
                         )
+                    }
+                }
+            } else {
+                // ── Grid view ──
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        contentPadding = PaddingValues(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(filteredImages, key = { it.uri }) { img ->
+                            GridItem(
+                                savedImage = img,
+                                onClick = { selectedImage = img }
+                            )
+                        }
                     }
                 }
             }
@@ -420,19 +545,12 @@ private fun FilterChipItem(label: String, isActive: Boolean, onClick: () -> Unit
 private fun PagerPage(
     savedImage: SavedImage,
     onClick: () -> Unit,
-    deleteMode: Boolean = false,
-    onDeleteRequest: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     val context = LocalContext.current
     val t = LocalTheme.current
     val isDark = t.background == Color(0xFF1E1E1E)
-
-    // 上滑手势偏移量
-    var dragOffsetY by remember { mutableFloatStateOf(0f) }
-    var dragConsumed by remember { mutableStateOf(false) }
-    val deleteThreshold = with(LocalDensity.current) { 100.dp.toPx() }
 
     LaunchedEffect(savedImage.id) {
         if (!savedImage.isVideo) {
@@ -446,27 +564,9 @@ private fun PagerPage(
         modifier = modifier
             .fillMaxSize()
             .padding(12.dp)
-            .offset { IntOffset(0, dragOffsetY.roundToInt()) }
-            .alpha((1f - (dragOffsetY / deleteThreshold).coerceIn(0f, 0.5f)).coerceIn(0.5f, 1f))
+            .border(2.dp, Color(0xFF3A3A3A), RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
             .background(Color(0xFF1E1E1E))
-            .then(
-                if (deleteMode) Modifier.pointerInput(savedImage.id) {
-                    detectVerticalDragGestures(
-                        onDragEnd = {
-                            if (-dragOffsetY > deleteThreshold && !dragConsumed) {
-                                dragConsumed = true
-                                onDeleteRequest()
-                            }
-                            dragOffsetY = 0f
-                        },
-                        onVerticalDrag = { _, dragAmount ->
-                            dragOffsetY = (dragOffsetY + dragAmount).coerceIn(-deleteThreshold * 2, 0f)
-                        }
-                    )
-                } else Modifier
-            )
-            .border(2.dp, Color(0xFF3A3A3A), RoundedCornerShape(10.dp))
             .clickable { onClick() }
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -574,6 +674,65 @@ private fun PagerPage(
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace
                 )
+            }
+        }
+    }
+}
+
+// ── Grid item ──
+
+@Composable
+private fun GridItem(
+    savedImage: SavedImage,
+    onClick: () -> Unit
+) {
+    var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+    val context = LocalContext.current
+
+    LaunchedEffect(savedImage.id) {
+        bitmap = loadImageSample(context, savedImage.uri, 400)
+    }
+
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF2E2E2E))
+            .clickable { onClick() }
+    ) {
+        if (bitmap != null) {
+            Image(
+                bitmap = bitmap!!.asImageBitmap(),
+                contentDescription = savedImage.name,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            CircularProgressIndicator(
+                color = Color(0xFF07C160),
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(20.dp).align(Alignment.Center)
+            )
+        }
+
+        // 统计叠加层
+        if (savedImage.stats.isNotEmpty()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .background(Color(0xAA000000))
+                    .padding(horizontal = 4.dp, vertical = 3.dp)
+            ) {
+                savedImage.stats.entries.take(2).forEach { (className, count) ->
+                    Text(
+                        text = "$className ($count)",
+                        color = Color(0xFF07C160),
+                        fontSize = 9.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }

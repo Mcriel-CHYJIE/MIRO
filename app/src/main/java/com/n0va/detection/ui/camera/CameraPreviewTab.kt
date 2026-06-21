@@ -83,7 +83,6 @@ fun CameraPreviewTab(
                 horizontalArrangement = Arrangement.spacedBy(0.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // 框显隐
                 Box(
                     modifier = Modifier
                         .size(36.dp)
@@ -101,7 +100,6 @@ fun CameraPreviewTab(
                     )
                 }
 
-                // 闪光灯
                 Box(
                     modifier = Modifier
                         .size(36.dp)
@@ -119,7 +117,6 @@ fun CameraPreviewTab(
                     )
                 }
 
-                // 前后切换
                 Box(
                     modifier = Modifier
                         .size(36.dp)
@@ -165,7 +162,7 @@ fun CameraPreviewTab(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // ── 目标计数（原始样式无底纹） ──
+            // ── 目标计数 ──
             if (isDetecting && detections.isNotEmpty()) {
                 val counts = detections.groupBy({ it.className }).mapValues { (_, v) -> v.size }
                 Column(

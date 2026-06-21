@@ -227,7 +227,6 @@ class MainActivity : ComponentActivity() {
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
                         type = "application/octet-stream"
-                        // 已识别 `.tflite` 的类型映射
                         putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(
                             "application/octet-stream",
                             "application/x-tflite",

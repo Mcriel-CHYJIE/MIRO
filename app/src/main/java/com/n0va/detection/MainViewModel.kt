@@ -135,6 +135,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _pendingImport = MutableStateFlow<ImportCandidate?>(null)
     val pendingImport: StateFlow<ImportCandidate?> = _pendingImport.asStateFlow()
 
+
+
     // ── 可调参数 ──
     private val _confThreshold = MutableStateFlow(prefs.getFloat(KEY_CONF, TFLiteDetector.confThreshold))
     val confThreshold: StateFlow<Float> = _confThreshold.asStateFlow()
@@ -254,6 +256,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── Tab 切换 ──
     fun onTabSelected(index: Int) {
+        // 切出实时页 → 停止检测
+        if (index != 0 && _isDetecting.value) {
+            forceStopDetection()
+        }
         // 切出文件页 → 取消视频处理
         if (index != 2 && _isProcessing.value) {
             cancelProcessing()
@@ -356,7 +362,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             updateFps(System.nanoTime())
 
             _detections.value = results
-            _frameW.value = w; _frameH.value = h
+            // 检测帧旋转后坐标基于旋转后的尺寸，交换 w/h 以匹配
+            if (rotation == 90 || rotation == 270) {
+                _frameW.value = h; _frameH.value = w
+            } else {
+                _frameW.value = w; _frameH.value = h
+            }
             _fps.value = calcFps()
             // 自动保存检测帧（每秒确认后保存，避免重复写入）
             if (_autoSaveEnabled.value && results.isNotEmpty()) {
@@ -412,10 +423,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, m, true)
                 }
 
-                // 画检测框（受录制绘制开关控制）
-                val drawBoxes = _drawBoxesOnRecording.value
-                Log.d(TAG, "保存帧: drawBoxes=$drawBoxes, dets=${dets.size}")
-                if (drawBoxes) {
+                // 画检测框（始终绘制，不受录制开关影响）
+                Log.d(TAG, "保存帧: drawBoxes=true, dets=${dets.size}")
                 val canvas = android.graphics.Canvas(bitmap)
                 val boxPaint = android.graphics.Paint().apply {
                     color = android.graphics.Color.GREEN
@@ -463,7 +472,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 canvas.setBitmap(null)
-                }
 
                 // ── 统计元数据 ──
                 val stats = dets.groupBy({ it.className }).mapValues { (_, v) -> v.size }

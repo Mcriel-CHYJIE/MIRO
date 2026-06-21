@@ -214,6 +214,9 @@ class TFLiteDetector(
         currentIsPose = model.isPose
         currentIsCustom = model.isCustom
         currentCustomTflitePath = model.customTflitePath
+        // 清空输出缓冲，重新适配输出张量形状
+        outputBufferNMS = null
+        outputBufferRaw = null
         try {
             labels = loadLabels()
             numClasses = labels.size
@@ -265,6 +268,7 @@ class TFLiteDetector(
         }
 
         // GPU delegate 优先
+        var gpuAttempted = false
         try {
             val gpuOptions = org.tensorflow.lite.gpu.GpuDelegateFactory.Options().apply {
                 inferencePreference = org.tensorflow.lite.gpu.GpuDelegateFactory.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER
@@ -274,6 +278,7 @@ class TFLiteDetector(
             options.addDelegate(gpu)
             options.setAllowBufferHandleOutput(true)  // 减少 GPU→CPU 拷贝
             gpuDelegate = gpu
+            gpuAttempted = true
             usedDevice = "GPU"
             Log.i(TAG, "GPU delegate added.")
         } catch (e: Exception) {
@@ -282,7 +287,23 @@ class TFLiteDetector(
             usedDevice = "CPU"
         }
 
-        return Interpreter(model, options)
+        try {
+            return Interpreter(model, options)
+        } catch (e: Exception) {
+            if (gpuAttempted) {
+                // GPU delegate 不兼容 → 关闭 GPU 用 CPU 重试
+                Log.w(TAG, "GPU delegate incompatible, falling back to CPU: ${e.message}")
+                gpuDelegate?.close()
+                gpuDelegate = null
+                usedDevice = "CPU"
+                val cpuOptions = Interpreter.Options().apply {
+                    setNumThreads(4)
+                    setUseXNNPACK(true)
+                }
+                return Interpreter(model, cpuOptions)
+            }
+            throw e
+        }
     }
 
     // ── 检测入口 ──
@@ -339,17 +360,22 @@ class TFLiteDetector(
     }
 
     private fun reuseOutputNMS(): Array<Array<FloatArray>> {
-        return outputBufferNMS ?: Array(1) { Array(300) { FloatArray(6) } }.also {
-            outputBufferNMS = it
+        // 每次读取实际输出张量形状，与缓存比较，不一致则重新分配
+        val outShape = interpreter?.getOutputTensor(0)?.shape() ?: intArrayOf(1, 300, 6)
+        val dim1 = if (outShape.size > 1) outShape[1] else 300
+        val dim2 = if (outShape.size > 2) outShape[2] else 6
+        if (outputBufferNMS == null || outputBufferNMS!![0].size != dim1 || outputBufferNMS!![0][0].size != dim2) {
+            outputBufferNMS = Array(outShape[0]) { Array(dim1) { FloatArray(dim2) } }
         }
+        return outputBufferNMS!!
     }
 
     private fun reuseOutputRaw(): Array<Array<FloatArray>> {
-        // 延迟分配：首次检测时读取 interpreter 输出形状
-        if (outputBufferRaw == null) {
-            val outShape = interpreter?.getOutputTensor(0)?.shape() ?: intArrayOf(1, 8, 11109)
-            val dim2 = if (outShape.size > 2) outShape[2] else 11109
-            val dim1 = if (outShape.size > 1) outShape[1] else 8
+        // 每次读取实际输出张量形状，与缓存比较，不一致则重新分配
+        val outShape = interpreter?.getOutputTensor(0)?.shape() ?: intArrayOf(1, 8, 11109)
+        val dim2 = if (outShape.size > 2) outShape[2] else 11109
+        val dim1 = if (outShape.size > 1) outShape[1] else 8
+        if (outputBufferRaw == null || outputBufferRaw!![0][0].size != dim2 || outputBufferRaw!![0].size != dim1) {
             outputBufferRaw = Array(outShape[0]) { Array(dim1) { FloatArray(dim2) } }
         }
         return outputBufferRaw!!
