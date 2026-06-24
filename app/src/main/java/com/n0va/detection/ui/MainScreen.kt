@@ -206,7 +206,9 @@ fun MainScreen(
                         onTapFocus = onTapFocus,
                         onPinchZoom = onPinchZoom,
                         isStreaming = isStreaming,
-                        onToggleStreaming = onToggleStreaming
+                        onToggleStreaming = onToggleStreaming,
+                        localIp = localIp,
+                        webcamPort = webcamPort
                     )
                     1 -> RecordsTab(
                         savedImages = savedImages,

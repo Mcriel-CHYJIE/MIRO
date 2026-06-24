@@ -41,11 +41,13 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.ViewCarousel
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
@@ -87,6 +89,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
+import java.util.LinkedHashMap
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -142,14 +145,14 @@ fun RecordsTab(
                             ) { isCardView = !isCardView },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = if (isCardView) "▦" else "▣",
-                            color = Color(0xFF07C160),
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold
+                        Icon(
+                            imageVector = if (isCardView) Icons.Default.GridView else Icons.Default.ViewCarousel,
+                            contentDescription = "切换视图",
+                            tint = Color(0xFF07C160),
+                            modifier = Modifier.size(20.dp)
                         )
                     }
-                    // 快捷删除开关
+                    // 快捷手势（上下滑动删除/分享）
                     Box(
                         modifier = Modifier
                             .size(36.dp)
@@ -160,8 +163,8 @@ fun RecordsTab(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.List,
-                            contentDescription = "批量操作",
+                            Icons.Default.DeleteSweep,
+                            contentDescription = "快捷手势",
                             tint = if (deleteMode) Color(0xFF07C160) else Color(0xFF555555),
                             modifier = Modifier.size(20.dp)
                         )
@@ -307,7 +310,7 @@ fun RecordsTab(
                     if (outerProgress > 0.1f) {
                         Box(
                             modifier = Modifier.fillMaxSize(),
-                            contentAlignment = if (outerDirection < 0) Alignment.TopCenter else Alignment.BottomCenter
+                            contentAlignment = if (outerDirection < 0) Alignment.BottomCenter else Alignment.TopCenter
                         ) {
                             Text(
                                 text = when {
@@ -681,6 +684,11 @@ private fun PagerPage(
 
 // ── Grid item ──
 
+private val thumbnailCache = object : LinkedHashMap<Long, Bitmap>(128, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Bitmap>): Boolean =
+        size > 128
+}
+
 @Composable
 private fun GridItem(
     savedImage: SavedImage,
@@ -690,7 +698,21 @@ private fun GridItem(
     val context = LocalContext.current
 
     LaunchedEffect(savedImage.id) {
-        bitmap = loadImageSample(context, savedImage.uri, 400)
+        // 检查缓存
+        val cached = thumbnailCache[savedImage.id]
+        if (cached != null) {
+            bitmap = cached
+            return@LaunchedEffect
+        }
+        val loaded = if (savedImage.isVideo) {
+            loadVideoThumbnail(context, savedImage.uri)
+        } else {
+            loadImageSample(context, savedImage.uri, 400)
+        }
+        if (loaded != null) {
+            thumbnailCache[savedImage.id] = loaded
+            bitmap = loaded
+        }
     }
 
     Box(
@@ -713,6 +735,24 @@ private fun GridItem(
                 strokeWidth = 2.dp,
                 modifier = Modifier.size(20.dp).align(Alignment.Center)
             )
+        }
+
+        // 视频标记
+        if (savedImage.isVideo) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .size(32.dp)
+                    .background(Color(0xBB000000), RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
         }
 
         // 统计叠加层

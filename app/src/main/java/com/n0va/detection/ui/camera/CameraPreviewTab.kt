@@ -62,7 +62,9 @@ fun CameraPreviewTab(
     onTapFocus: (Float, Float, Int, Int) -> Unit = { _, _, _, _ -> },
     onPinchZoom: (Float) -> Unit = {},
     isStreaming: Boolean = false,
-    onToggleStreaming: () -> Unit = {}
+    onToggleStreaming: () -> Unit = {},
+    localIp: String = "",
+    webcamPort: String = "8080"
 ) {
     val t = LocalTheme.current
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
@@ -261,6 +263,26 @@ fun CameraPreviewTab(
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace
                     )
+                }
+
+                // ── 推流地址（画面底部） ──
+                if (localIp.isNotEmpty()) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 12.dp)
+                            .background(Color(0xBB000000), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "http://$localIp:${webcamPort}/stream",
+                            color = Color(0xFF4CAF50),
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
