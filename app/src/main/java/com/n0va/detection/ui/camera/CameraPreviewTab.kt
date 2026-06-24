@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FlipCameraAndroid
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.FlashOn
 import androidx.compose.material.icons.filled.FlashOff
 import androidx.compose.material.icons.filled.Visibility
@@ -59,7 +60,9 @@ fun CameraPreviewTab(
     isRecording: Boolean = false,
     modelName: String = "",
     onTapFocus: (Float, Float, Int, Int) -> Unit = { _, _, _, _ -> },
-    onPinchZoom: (Float) -> Unit = {}
+    onPinchZoom: (Float) -> Unit = {},
+    isStreaming: Boolean = false,
+    onToggleStreaming: () -> Unit = {}
 ) {
     val t = LocalTheme.current
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
@@ -113,6 +116,24 @@ fun CameraPreviewTab(
                         if (isFlashOn) Icons.Default.FlashOn else Icons.Default.FlashOff,
                         contentDescription = "闪光灯",
                         tint = if (isFlashOn) Color(0xFFFFC107) else t.textDim,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // ── 推流开关 ──
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onToggleStreaming() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Default.Cast,
+                        contentDescription = "推流",
+                        tint = if (isStreaming) Color(0xFFE53935) else t.textDim,
                         modifier = Modifier.size(20.dp)
                     )
                 }
@@ -210,6 +231,32 @@ fun CameraPreviewTab(
                     Text(
                         "REC",
                         color = Color(0xFFE53935),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+
+            // ── 推流提示 ──
+            if (isStreaming) {
+                Row(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(end = 16.dp, top = if (isRecording) 46.dp else 16.dp)
+                        .background(Color(0xBB000000), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .background(Color(0xFF4CAF50), RoundedCornerShape(4.dp))
+                    )
+                    Spacer(Modifier.width(5.dp))
+                    Text(
+                        "LIVE",
+                        color = Color(0xFF4CAF50),
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace

@@ -44,6 +44,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_CONF = "conf_threshold"
         private const val KEY_IOU = "iou_threshold"
         private const val KEY_MODEL = "active_model"
+        private const val KEY_WEBCAM_PORT = "webcam_port"
+        private const val KEY_WEBCAM_QUALITY = "webcam_quality"
+        private const val KEY_WEBCAM_RES = "webcam_resolution"
     }
 
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -119,6 +122,88 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ── 闪光灯 ──
     private val _isFlashOn = MutableStateFlow(false)
     val isFlashOn: StateFlow<Boolean> = _isFlashOn.asStateFlow()
+
+    // ── IP Webcam 推流 ──
+    private val _webcamPort = MutableStateFlow(prefs.getString(KEY_WEBCAM_PORT, "8080") ?: "8080")
+    val webcamPort: StateFlow<String> = _webcamPort.asStateFlow()
+
+    private val _webcamQuality = MutableStateFlow(prefs.getInt(KEY_WEBCAM_QUALITY, 80))
+    val webcamQuality: StateFlow<Int> = _webcamQuality.asStateFlow()
+
+    private val _webcamResolution = MutableStateFlow(prefs.getString(KEY_WEBCAM_RES, "720p") ?: "720p")
+    val webcamResolution: StateFlow<String> = _webcamResolution.asStateFlow()
+
+    private val _isStreaming = MutableStateFlow(false)
+    val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
+
+    val mjpegServer = com.n0va.detection.server.MjpegServer()
+
+    private var streamingJob: Job? = null
+    private var latestNv21: ByteArray? = null
+    private var latestNv21W = 0
+    private var latestNv21H = 0
+
+    fun updateWebcamPort(port: String) {
+        _webcamPort.value = port
+        prefs.edit().putString(KEY_WEBCAM_PORT, port).apply()
+    }
+
+    fun updateWebcamQuality(q: Int) {
+        _webcamQuality.value = q
+        prefs.edit().putInt(KEY_WEBCAM_QUALITY, q).apply()
+    }
+
+    fun updateWebcamResolution(res: String) {
+        _webcamResolution.value = res
+        prefs.edit().putString(KEY_WEBCAM_RES, res).apply()
+    }
+
+    fun toggleStreaming() {
+        if (_isStreaming.value) {
+            stopStreaming()
+        } else {
+            startStreaming()
+        }
+    }
+
+    private fun startStreaming() {
+        val port = _webcamPort.value.toIntOrNull() ?: 8080
+        mjpegServer.port = port
+        mjpegServer.start()
+        _isStreaming.value = true
+
+        streamingJob = scope.launch {
+            val frameInterval = 33L
+            while (isActive) {
+                val nv21 = latestNv21
+                if (nv21 != null) {
+                    try {
+                        val w = latestNv21W; val h = latestNv21H
+                        if (w > 0 && h > 0) {
+                            val quality = _webcamQuality.value
+                            val yuvImage = android.graphics.YuvImage(
+                                nv21, android.graphics.ImageFormat.NV21, w, h, null
+                            )
+                            val baos = java.io.ByteArrayOutputStream()
+                            yuvImage.compressToJpeg(
+                                android.graphics.Rect(0, 0, w, h), quality, baos
+                            )
+                            val jpeg = baos.toByteArray()
+                            mjpegServer.setLatestFrame(jpeg)
+                        }
+                    } catch (_: Exception) {}
+                }
+                delay(frameInterval)
+            }
+        }
+    }
+
+    private fun stopStreaming() {
+        streamingJob?.cancel()
+        streamingJob = null
+        mjpegServer.stop()
+        _isStreaming.value = false
+    }
 
     // ── 保存的记录 ──
     private val _savedImages = MutableStateFlow<List<SavedImage>>(emptyList())
@@ -344,6 +429,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         infFrameH = h
         infRotation = rotation
         latestFrame.set(data)
+        // 缓存最新帧用于推流
+        if (_isStreaming.value) {
+            latestNv21 = data
+            latestNv21W = w
+            latestNv21H = h
+        }
     }
 
     private suspend fun inferenceLoop() = withContext(Dispatchers.Default) {
@@ -766,6 +857,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _showBoxes.value = true
         _isFlashOn.value = false
         _activeModelIndex.value = 0
+        _webcamPort.value = "8080"
+        prefs.edit().putString(KEY_WEBCAM_PORT, "8080").apply()
+        _webcamQuality.value = 80
+        prefs.edit().putInt(KEY_WEBCAM_QUALITY, 80).apply()
+        _webcamResolution.value = "720p"
+        prefs.edit().putString(KEY_WEBCAM_RES, "720p").apply()
         addCameraLog("设置已重置", isSystem = true)
     }
 
@@ -971,6 +1068,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── 清理 ──
     override fun onCleared() {
+        stopStreaming()
         running = false
         processingJob?.cancel()
         scope.cancel()

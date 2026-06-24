@@ -11,8 +11,8 @@ android {
         applicationId = "com.n0va.detection"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "0.2.8"
+        versionCode = 9
+        versionName = "0.3.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a")

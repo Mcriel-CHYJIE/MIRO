@@ -53,7 +53,14 @@ fun SettingsTab(
     onImportModel: () -> Unit = {},
     onResetSettings: () -> Unit = {},
     onDeleteModel: (Int) -> Unit = {},
-    onEditModel: (Int, String, String) -> Unit = { _, _, _ -> }
+    onEditModel: (Int, String, String) -> Unit = { _, _, _ -> },
+    webcamPort: String = "8080",
+    onWebcamPortChange: (String) -> Unit = {},
+    webcamQuality: Int = 80,
+    onWebcamQualityChange: (Int) -> Unit = {},
+    webcamResolution: String = "720p",
+    onWebcamResolutionChange: (String) -> Unit = {},
+    localIp: String = ""
 ) {
     val t = LocalTheme.current
     var editTarget by remember { mutableStateOf<Int?>(null) }
@@ -149,6 +156,112 @@ fun SettingsTab(
                 }
                 Spacer(Modifier.height(20.dp))
 
+                SectionHeader("IP Webcam 推流", t.textSecondary)
+                Card(t.cardBg) {
+                    // 端口 — 显示完整推流地址
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("端口", fontSize = 13.sp, color = t.textSecondary)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (localIp.isNotEmpty()) {
+                                Text(
+                                    "http://$localIp:",
+                                    fontSize = 11.sp,
+                                    color = t.textDim,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .width(56.dp)
+                                    .height(28.dp)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isDarkTheme) Color(0xFF3A3A3A) else Color(0xFFE8E8E8))
+                                    .padding(horizontal = 8.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                BasicTextField(
+                                    value = webcamPort,
+                                    onValueChange = { v ->
+                                        if (v.all { it.isDigit() } && v.length <= 5) onWebcamPortChange(v)
+                                    },
+                                    singleLine = true,
+                                    textStyle = LocalTextStyle.current.copy(
+                                        fontSize = 12.sp, color = t.textPrimary,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                    ),
+                                    cursorBrush = SolidColor(t.accent),
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            Text(
+                                "/stream",
+                                fontSize = 11.sp,
+                                color = t.textDim,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF444444)))
+                    Spacer(Modifier.height(2.dp))
+                    // 画质
+                    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("画质", fontSize = 13.sp, color = t.textSecondary)
+                            Text("${webcamQuality}%", fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium, color = t.accent,
+                                fontFamily = FontFamily.Monospace)
+                        }
+                        Slider(
+                            value = webcamQuality.toFloat(),
+                            onValueChange = { onWebcamQualityChange(it.toInt()) },
+                            valueRange = 10f..100f,
+                            modifier = Modifier.fillMaxWidth().height(24.dp),
+                            colors = SliderDefaults.colors(
+                                thumbColor = t.accent, activeTrackColor = t.accent,
+                                inactiveTrackColor = Color(0xFF555555)
+                            )
+                        )
+                    }
+                    Spacer(Modifier.height(2.dp))
+                    Box(Modifier.fillMaxWidth().height(0.5.dp).background(Color(0xFF444444)))
+                    Spacer(Modifier.height(2.dp))
+                    // 分辨率
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("分辨率", fontSize = 13.sp, color = t.textSecondary)
+                        Row {
+                            listOf("480p", "720p", "1080p").forEach { res ->
+                                FilterChip(
+                                    selected = webcamResolution == res,
+                                    onClick = { onWebcamResolutionChange(res) },
+                                    label = { Text(res, fontSize = 10.sp) },
+                                    modifier = Modifier.height(24.dp),
+                                    shape = RoundedCornerShape(4.dp),
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = t.accent,
+                                        selectedLabelColor = Color.White,
+                                        containerColor = t.background
+                                    )
+                                )
+                                Spacer(Modifier.width(4.dp))
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(20.dp))
+
                 SectionHeader("检测保存", t.textSecondary)
                 Card(t.cardBg) {
                     Row(
@@ -219,7 +332,7 @@ fun SettingsTab(
 
                 SectionHeader("应用信息", t.textSecondary)
                 Card(t.cardBg) {
-                    InfoRow("版本", "0.2.8", t.textSecondary, t.textPrimary)
+                    InfoRow("版本", "0.3.0", t.textSecondary, t.textPrimary)
                     Spacer(Modifier.height(10.dp))
                     InfoRow("模型", if (modelLoaded) "${TFLiteDetector.activeModelName}" else "—", t.textSecondary, t.textPrimary)
                     Spacer(Modifier.height(10.dp))
@@ -238,7 +351,7 @@ fun SettingsTab(
                 }
 
                 Spacer(Modifier.height(24.dp))
-                Text("MIRO v0.2.8  ·  ©Mcriel_CHYJIE", fontSize = 11.sp, color = t.textDim,
+                Text("MIRO v0.3.0  ·  ©Mcriel_CHYJIE", fontSize = 11.sp, color = t.textDim,
                     modifier = Modifier.align(Alignment.CenterHorizontally))
                 Spacer(Modifier.height(16.dp))
             }

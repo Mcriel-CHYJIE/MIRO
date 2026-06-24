@@ -101,7 +101,16 @@ fun MainScreen(
     showBoxes: Boolean = true,
     isFlashOn: Boolean = false,
     mirrorX: Boolean = false,
-    isSwitchingModel: Boolean = false
+    isSwitchingModel: Boolean = false,
+    isStreaming: Boolean = false,
+    onToggleStreaming: () -> Unit = {},
+    webcamPort: String = "8080",
+    onWebcamPortChange: (String) -> Unit = {},
+    webcamQuality: Int = 80,
+    onWebcamQualityChange: (Int) -> Unit = {},
+    webcamResolution: String = "720p",
+    onWebcamResolutionChange: (String) -> Unit = {},
+    localIp: String = ""
 ) {
     val theme = if (isDarkTheme) MiroTheme.Dark else MiroTheme.Light
     CompositionLocalProvider(LocalTheme provides theme) {
@@ -195,7 +204,9 @@ fun MainScreen(
                         modelName = availableModels.getOrNull(activeModelIndex) ?: "",
                         onToggleRecording = onToggleRecording,
                         onTapFocus = onTapFocus,
-                        onPinchZoom = onPinchZoom
+                        onPinchZoom = onPinchZoom,
+                        isStreaming = isStreaming,
+                        onToggleStreaming = onToggleStreaming
                     )
                     1 -> RecordsTab(
                         savedImages = savedImages,
@@ -235,7 +246,14 @@ fun MainScreen(
                         onImportModel = onImportModel,
                         onResetSettings = onResetSettings,
                         onDeleteModel = onDeleteModel,
-                        onEditModel = onEditModel
+                        onEditModel = onEditModel,
+                        webcamPort = webcamPort,
+                        onWebcamPortChange = onWebcamPortChange,
+                        webcamQuality = webcamQuality,
+                        onWebcamQualityChange = onWebcamQualityChange,
+                        webcamResolution = webcamResolution,
+                        onWebcamResolutionChange = onWebcamResolutionChange,
+                        localIp = localIp
                     )
                 }
             }

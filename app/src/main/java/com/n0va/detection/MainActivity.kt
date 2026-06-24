@@ -26,6 +26,8 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import com.n0va.detection.camera.CameraManager
 import com.n0va.detection.ui.MainScreen
+import java.net.Inet4Address
+import java.net.NetworkInterface
 
 class MainActivity : ComponentActivity() {
 
@@ -86,8 +88,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
         installSplashScreen()
+        super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         WindowCompat.getInsetsController(window, window.decorView).apply {
             isAppearanceLightStatusBars = false
@@ -121,6 +123,10 @@ class MainActivity : ComponentActivity() {
             val autoSaveEnabled by viewModel.autoSaveEnabled.collectAsState()
             val autoSaveClass by viewModel.autoSaveClass.collectAsState()
             val isRecording by viewModel.isRecording.collectAsState()
+            val isStreaming by viewModel.isStreaming.collectAsState()
+            val webcamPort by viewModel.webcamPort.collectAsState()
+            val webcamQuality by viewModel.webcamQuality.collectAsState()
+            val webcamResolution by viewModel.webcamResolution.collectAsState()
             var currentZoom by remember { mutableStateOf(1f) }
 
             // 同步系统导航栏颜色到主题
@@ -134,6 +140,23 @@ class MainActivity : ComponentActivity() {
                     isAppearanceLightNavigationBars = !isDarkTheme
                 }
             }
+
+            // 推流前台服务生命周期
+            LaunchedEffect(isStreaming) {
+                if (isStreaming) {
+                    try {
+                        startForegroundService(
+                            Intent(this@MainActivity, com.n0va.detection.service.StreamService::class.java)
+                        )
+                    } catch (_: Exception) {}
+                } else {
+                    stopService(
+                        Intent(this@MainActivity, com.n0va.detection.service.StreamService::class.java)
+                    )
+                }
+            }
+
+            val localIp = remember { getLocalIpAddress() }
 
             MainScreen(
                 startCamera = { pv ->
@@ -244,7 +267,16 @@ class MainActivity : ComponentActivity() {
                 onEditModel = { index, name, labels -> viewModel.editCustomModel(index, name, labels) },
                 pendingImport = viewModel.pendingImport.collectAsState().value,
                 onConfirmImport = { name, labels -> viewModel.confirmImport(name, labels) },
-                onCancelImport = { viewModel.cancelImport() }
+                onCancelImport = { viewModel.cancelImport() },
+                isStreaming = isStreaming,
+                onToggleStreaming = { viewModel.toggleStreaming() },
+                webcamPort = webcamPort,
+                onWebcamPortChange = { viewModel.updateWebcamPort(it) },
+                webcamQuality = webcamQuality,
+                onWebcamQualityChange = { viewModel.updateWebcamQuality(it) },
+                webcamResolution = webcamResolution,
+                onWebcamResolutionChange = { viewModel.updateWebcamResolution(it) },
+                localIp = localIp
             )
         }
     }
@@ -253,5 +285,28 @@ class MainActivity : ComponentActivity() {
         cameraManager?.shutdown()
         cameraManager = null
         super.onDestroy()
+    }
+
+    private fun getLocalIpAddress(): String {
+        val wifiManager = applicationContext.getSystemService(android.content.Context.WIFI_SERVICE)
+            as? android.net.wifi.WifiManager
+        if (wifiManager != null) {
+            try {
+                val wifiInfo = wifiManager.connectionInfo
+                val ipInt = wifiInfo.ipAddress
+                if (ipInt != 0) return String.format(
+                    "%d.%d.%d.%d",
+                    ipInt and 0xff, ipInt shr 8 and 0xff,
+                    ipInt shr 16 and 0xff, ipInt shr 24 and 0xff
+                )
+            } catch (_: Exception) {}
+        }
+        try {
+            NetworkInterface.getNetworkInterfaces()?.asSequence()
+                ?.flatMap { it.inetAddresses.asSequence() }
+                ?.filter { !it.isLoopbackAddress && it is Inet4Address }
+                ?.forEach { return it.hostAddress ?: "" }
+        } catch (_: Exception) {}
+        return ""
     }
 }
