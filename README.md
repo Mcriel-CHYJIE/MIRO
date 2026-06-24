@@ -23,9 +23,9 @@
 
 ## Overview · 概述
 
-**MIRO** is a real-time object detection Android application that performs on-device inference using TensorFlow Lite with GPU/NNAPI acceleration. It supports multi-model switching, video recording with bounding box overlay, automatic frame capture by class, and a full-featured record management system.
+**MIRO** is a real-time object detection Android application that performs on-device inference using TensorFlow Lite with GPU/NNAPI acceleration. It supports multi-model switching, video recording with bounding box overlay, automatic frame capture by class, MJPEG IP Webcam streaming, and a full-featured record management system.
 
-**MIRO** 是一款实时目标检测 Android 应用，使用 TensorFlow Lite 在设备端进行推理，支持 GPU/NNAPI 加速。支持多模型切换、检测框叠加录像、按类别自动保存检测帧以及完整的记录管理系统。
+**MIRO** 是一款实时目标检测 Android 应用，使用 TensorFlow Lite 在设备端进行推理，支持 GPU/NNAPI 加速。支持多模型切换、检测框叠加录像、按类别自动保存检测帧、MJPEG 网络摄像头推流以及完整的记录管理系统。
 
 ## Features · 功能特性
 
@@ -38,6 +38,7 @@
 | 📸 **Frame Capture** | Save detection frames with boxes and metadata |
 | 🤖 **Auto-Save** | Auto-capture when a specific class is detected (stabilized) |
 | 🗂️ **Record Management** | Browse, filter, paginate, full-screen preview with video playback |
+| 🌐 **IP Webcam** | MJPEG HTTP streaming — view live feed in any browser |
 | 🎨 **Theme** | Dark/Light mode, customizable thresholds |
 | 📦 **Model Import** | Import custom TFLite models in-app |
 
@@ -54,7 +55,7 @@
 ```
 app/src/main/java/com/n0va/detection/
 ├── MainActivity.kt          # Entry point, permission handling, camera wiring
-├── MainViewModel.kt         # MVVM ViewModel — inference loop, recording, state, persistence
+├── MainViewModel.kt         # MVVM ViewModel — inference loop, recording, state, persistence, streaming
 ├── camera/
 │   ├── CameraManager.kt     # CameraX lifecycle, focus, flash, dual recording modes
 │   └── OverlayVideoRecorder.kt  # Custom MediaCodec encoder with detection box overlay
@@ -62,16 +63,20 @@ app/src/main/java/com/n0va/detection/
 │   ├── TFLiteDetector.kt    # Model loading, inference, NMS, multi-format decoding
 │   ├── DetectionResult.kt   # Data models: DetectionResult, KeyPoint, PoseConstants
 │   └── DetectionEngine.kt   # Engine abstraction (legacy NCNN interface)
+├── server/
+│   └── MjpegServer.kt       # HTTP MJPEG streaming server
+├── service/
+│   └── StreamService.kt     # Foreground service for background streaming
 ├── ui/
 │   ├── MainScreen.kt        # Tab navigation with bottom bar
 │   ├── camera/
-│   │   └── CameraPreviewTab.kt   # Preview, overlays, recording indicator
+│   │   └── CameraPreviewTab.kt   # Preview, overlays, recording indicator, streaming toggle
 │   ├── records/
 │   │   └── RecordsTab.kt         # Record browser, video player, swipe-to-delete
 │   ├── file/
 │   │   └── FilePreviewTab.kt     # External file detection
 │   ├── settings/
-│   │   └── SettingsTab.kt        # Model/recording/save settings
+│   │   └── SettingsTab.kt        # Model/recording/save/webcam settings
 │   ├── components/
 │   │   ├── DetectionControlBar.kt  # Start/stop, record, save controls
 │   │   ├── PreviewFrame.kt        # Camera preview with overlay composable
@@ -92,6 +97,7 @@ app/src/main/java/com/n0va/detection/
 | **ML Inference** | TensorFlow Lite 2.16 (GPU Delegate / NNAPI / CPU) |
 | **Architecture** | MVVM — AndroidViewModel + StateFlow |
 | **Video Encoding** | MediaCodec + MediaMuxer (overlay recording) |
+| **Streaming** | MJPEG over HTTP (multipart/x-mixed-replace) |
 | **Storage** | App-private directory (`filesDir/MIRO/`) |
 | **Build** | Gradle 8.2 + JDK 17 |
 
@@ -117,6 +123,23 @@ cd MIRO
 ```bash
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+## IP Webcam Streaming · 网络摄像头推流
+
+MIRO v0.3.0+ includes an integrated MJPEG streaming server that turns your device into an IP webcam:
+
+1. **Configure** → **Settings** → **IP Webcam 推流** section (port, quality, resolution)
+2. **Start** → Tap the **Cast icon** in the real-time detection page header
+3. **View** → Open `http://<device-ip>:<port>/stream` in any browser
+4. Streaming runs **alongside** detection — both share the same camera feed
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| Port | 8080 | HTTP server port |
+| Quality | 80% | JPEG compression (10–100%) |
+| Resolution | 720p | 480p / 720p / 1080p |
+
+The stream uses MJPEG over HTTP (`multipart/x-mixed-replace`) — compatible with all modern browsers, VLC, FFmpeg, and most IP camera viewers.
 
 ## Model Format · 模型格式
 
@@ -149,6 +172,9 @@ Settings are persisted in `SharedPreferences` (`miro_settings`):
 | `draw_boxes_on_recording` | true | Overlay boxes on recorded video |
 | `auto_save_enabled` | false | Auto-capture when target class detected |
 | `auto_save_class` | "" | Target class name for auto-capture |
+| `webcam_port` | "8080" | IP Webcam server port |
+| `webcam_quality` | 80 | IP Webcam JPEG quality (10–100) |
+| `webcam_resolution` | "720p" | IP Webcam resolution (480p/720p/1080p) |
 
 ## Privacy · 隐私
 
@@ -175,6 +201,6 @@ See [LICENSE](LICENSE) for full terms.
 
 **Contact: 2713150993@qq.com**
 
-v0.2.8
+v0.3.0
 
 </div>
