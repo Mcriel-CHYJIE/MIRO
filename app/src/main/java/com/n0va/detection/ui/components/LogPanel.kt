@@ -44,7 +44,7 @@ fun LogPanel(
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp, bottomStart = 0.dp, bottomEnd = 0.dp))
             .background(t.navBar)
     ) {
         if (entries.isEmpty()) {

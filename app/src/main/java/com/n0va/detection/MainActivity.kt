@@ -89,12 +89,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
+        // 在 super.onCreate 之前设置系统栏颜色,避免启动时闪白
+        window.statusBarColor = 0xFF252525.toInt()
+        window.navigationBarColor = 0xFF2E2E2E.toInt()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowCompat.getInsetsController(window, window.decorView).apply {
             isAppearanceLightStatusBars = false
             isAppearanceLightNavigationBars = false
         }
+        // 初始状态栏/导航栏颜色(与顶栏/底栏背景色完全一致)
+        applySystemBarColors(viewModel.isDarkTheme.value)
 
         viewModel.addCameraLog("初始化 TFLite 引擎...", isSystem = true)
 
@@ -129,16 +135,9 @@ class MainActivity : ComponentActivity() {
             val webcamResolution by viewModel.webcamResolution.collectAsState()
             var currentZoom by remember { mutableStateOf(1f) }
 
-            // 同步系统导航栏颜色到主题
-            val activity = LocalContext.current as? androidx.activity.ComponentActivity
+            // 主题切换时同步系统栏颜色（状态栏与顶栏同色,导航栏与底栏同色）
             LaunchedEffect(isDarkTheme) {
-                val w = activity?.window ?: return@LaunchedEffect
-                w.navigationBarColor = android.graphics.Color.parseColor(if (isDarkTheme) "#2E2E2E" else "#F0F0F0")
-                w.statusBarColor = android.graphics.Color.parseColor(if (isDarkTheme) "#1E1E1E" else "#E8E8E8")
-                androidx.core.view.WindowCompat.getInsetsController(w, w.decorView).apply {
-                    isAppearanceLightStatusBars = !isDarkTheme
-                    isAppearanceLightNavigationBars = !isDarkTheme
-                }
+                applySystemBarColors(isDarkTheme)
             }
 
             // 推流前台服务生命周期
@@ -242,7 +241,7 @@ class MainActivity : ComponentActivity() {
                     cameraManager?.setZoom(currentZoom)
                 },
                 onDeleteRecord = { uri -> viewModel.deleteSavedImage(uri) },
-                availableModels = com.n0va.detection.detection.TFLiteDetector.availableModels.map { it.name },
+                availableModels = viewModel.modelManager.availableModels.map { it.name },
                 activeModelIndex = activeModelIndex,
                 onSwitchModel = { viewModel.switchModel(it) },
                 isSwitchingModel = isSwitchingModel,
@@ -265,6 +264,11 @@ class MainActivity : ComponentActivity() {
                 onResetSettings = { viewModel.resetSettings() },
                 onDeleteModel = { index -> viewModel.deleteCustomModel(index) },
                 onEditModel = { index, name, labels -> viewModel.editCustomModel(index, name, labels) },
+                isCustomModel = { i -> viewModel.modelManager.availableModels.getOrNull(i)?.isCustom ?: false },
+                getModelLabels = { i -> viewModel.modelManager.availableModels.getOrNull(i)?.let {
+                    try { java.io.File(it.labelsFile).readText() } catch (_: Exception) { "" }
+                } ?: "" },
+                modelInputSize = viewModel.modelManager.currentModelInfo.inputSize,
                 pendingImport = viewModel.pendingImport.collectAsState().value,
                 onConfirmImport = { name, labels -> viewModel.confirmImport(name, labels) },
                 onCancelImport = { viewModel.cancelImport() },
@@ -308,5 +312,18 @@ class MainActivity : ComponentActivity() {
                 ?.forEach { return it.hostAddress ?: "" }
         } catch (_: Exception) {}
         return ""
+    }
+
+    /** 同步系统栏颜色到当前主题:状态栏=顶栏色,导航栏=底栏色,保证视觉无分层 */
+    private fun applySystemBarColors(isDark: Boolean) {
+        val w = window
+        val headerBg = if (isDark) 0xFF252525L else 0xFFE8E8E8L
+        val navBarBg = if (isDark) 0xFF2E2E2EL else 0xFFF0F0F0L
+        w.statusBarColor = headerBg.toInt()
+        w.navigationBarColor = navBarBg.toInt()
+        WindowCompat.getInsetsController(w, w.decorView).apply {
+            isAppearanceLightStatusBars = !isDark  // 暗色背景用白色图标,亮色背景用深色图标
+            isAppearanceLightNavigationBars = !isDark
+        }
     }
 }

@@ -7,7 +7,6 @@ import android.util.Size
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.*
-import androidx.camera.video.*
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
@@ -38,7 +37,7 @@ class CameraManager(
 
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private var cameraProvider: ProcessCameraProvider? = null
-    private var nv21Cache = ByteArray(640 * 480 * 3 / 2)
+    private var nv21Cache = ByteArray(0)
 
     /** 当前帧尺寸和旋转角度 */
     var frameW = 0

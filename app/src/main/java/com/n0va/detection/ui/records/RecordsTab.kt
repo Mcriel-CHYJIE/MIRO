@@ -89,7 +89,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
-import java.util.LinkedHashMap
+import android.util.LruCache
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -684,9 +684,9 @@ private fun PagerPage(
 
 // ── Grid item ──
 
-private val thumbnailCache = object : LinkedHashMap<Long, Bitmap>(128, 0.75f, true) {
-    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Long, Bitmap>): Boolean =
-        size > 128
+private val maxThumbnailMemoryKb = (Runtime.getRuntime().maxMemory() / 8 / 1024).toInt() // 最大堆的 1/8
+private val thumbnailCache = object : LruCache<Long, Bitmap>(maxThumbnailMemoryKb) {
+    override fun sizeOf(key: Long, bitmap: Bitmap): Int = bitmap.byteCount / 1024
 }
 
 @Composable
@@ -699,7 +699,7 @@ private fun GridItem(
 
     LaunchedEffect(savedImage.id) {
         // 检查缓存
-        val cached = thumbnailCache[savedImage.id]
+        val cached = thumbnailCache.get(savedImage.id)
         if (cached != null) {
             bitmap = cached
             return@LaunchedEffect
@@ -710,7 +710,7 @@ private fun GridItem(
             loadImageSample(context, savedImage.uri, 400)
         }
         if (loaded != null) {
-            thumbnailCache[savedImage.id] = loaded
+            thumbnailCache.put(savedImage.id, loaded)
             bitmap = loaded
         }
     }

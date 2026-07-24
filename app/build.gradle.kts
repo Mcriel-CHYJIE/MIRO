@@ -34,12 +34,12 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "17"
     }
 
     buildFeatures {
@@ -61,7 +61,7 @@ dependencies {
     implementation("androidx.core:core-splashscreen:1.0.1")
 
     // ── Compose ──
-    implementation(platform("androidx.compose:compose-bom:2024.02.00"))
+    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-viewbinding")
@@ -81,11 +81,11 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     // ── TensorFlow Lite + GPU delegate ──
-    implementation("org.tensorflow:tensorflow-lite:2.16.1")
-    implementation("org.tensorflow:tensorflow-lite-gpu:2.16.1")
-    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.16.1")
-    // NNAPI delegate is bundled with the base tflite on API 27+
-    implementation("org.tensorflow:tensorflow-lite-api:2.16.1")
-    // Select TF ops（某些自定义模型需要 Flex ops）
+    // 2.17.0 开始原生支持 16K 页对齐（Android 15+ 设备必需）
+    // select-tf-ops 最高只到 2.16.1，保持原版本
+    implementation("org.tensorflow:tensorflow-lite:2.17.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.17.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu-api:2.17.0")
+    // Select TF ops（某些自定义模型需要 Flex ops，最高 2.16.1）
     implementation("org.tensorflow:tensorflow-lite-select-tf-ops:2.16.1")
 }

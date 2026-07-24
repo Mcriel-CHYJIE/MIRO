@@ -7,6 +7,7 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.n0va.detection.detection.DetectionResult
 import com.n0va.detection.detection.TFLiteDetector
 import com.n0va.detection.ui.components.LogEntry
@@ -15,7 +16,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import android.content.Context
-import android.os.Build
 import android.provider.OpenableColumns
 import org.tensorflow.lite.Interpreter
 import java.text.SimpleDateFormat
@@ -47,6 +47,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val KEY_WEBCAM_PORT = "webcam_port"
         private const val KEY_WEBCAM_QUALITY = "webcam_quality"
         private const val KEY_WEBCAM_RES = "webcam_resolution"
+
+        // 可复用的 Paint 对象，避免 saveCurrentFrame 中每帧创建
+        private val boxPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.GREEN
+            strokeWidth = 5f
+            style = android.graphics.Paint.Style.STROKE
+        }
+        private val labelPaint = android.graphics.Paint().apply {
+            color = android.graphics.Color.GREEN
+            textSize = 38f
+            style = android.graphics.Paint.Style.FILL
+        }
+        private val skelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(180, 0, 255, 100)
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = 3f
+            strokeCap = android.graphics.Paint.Cap.ROUND
+        }
+        private val kptPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.GREEN
+            style = android.graphics.Paint.Style.FILL
+        }
+
+        /** NV21 → ARGB_8888 Bitmap 直转，跳过 JPEG 编解码 */
+        fun nv21ToBitmap(nv21: ByteArray, w: Int, h: Int): Bitmap {
+            val pixels = IntArray(w * h)
+            val uvStart = w * h
+            for (y in 0 until h) {
+                for (x in 0 until w) {
+                    val yIdx = y * w + x
+                    val uvIdx = uvStart + (y / 2) * w + (x / 2) * 2
+                    val Y = nv21[yIdx].toInt() and 0xFF
+                    // NV21 存储顺序为 V, U（先 V 后 U）
+                    val V = nv21[uvIdx].toInt() and 0xFF
+                    val U = nv21[uvIdx + 1].toInt() and 0xFF
+
+                    val r = (Y + 1.402f * (V - 128)).coerceIn(0f, 255f).toInt()
+                    val g = (Y - 0.344f * (U - 128) - 0.714f * (V - 128)).coerceIn(0f, 255f).toInt()
+                    val b = (Y + 1.772f * (U - 128)).coerceIn(0f, 255f).toInt()
+
+                    pixels[y * w + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                }
+            }
+            return Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
+        }
     }
 
     private val prefs = application.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -172,8 +217,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         mjpegServer.start()
         _isStreaming.value = true
 
-        streamingJob = scope.launch {
+        streamingJob = viewModelScope.launch(Dispatchers.Default) {
             val frameInterval = 33L
+            val baos = java.io.ByteArrayOutputStream(1024 * 256) // 预分配 256KB 避免扩容
             while (isActive) {
                 val nv21 = latestNv21
                 if (nv21 != null) {
@@ -184,7 +230,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val yuvImage = android.graphics.YuvImage(
                                 nv21, android.graphics.ImageFormat.NV21, w, h, null
                             )
-                            val baos = java.io.ByteArrayOutputStream()
+                            baos.reset()
                             yuvImage.compressToJpeg(
                                 android.graphics.Rect(0, 0, w, h), quality, baos
                             )
@@ -229,25 +275,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _iouThreshold = MutableStateFlow(prefs.getFloat(KEY_IOU, TFLiteDetector.iouThreshold))
     val iouThreshold: StateFlow<Float> = _iouThreshold.asStateFlow()
 
-    // ── 模型切换 ──
-    private val _activeModelIndex = MutableStateFlow(prefs.getInt(KEY_MODEL, TFLiteDetector.activeModelIndex))
+    // ── 检测器和模型管理 ──
+    val modelManager = com.n0va.detection.detection.ModelManager(getApplication())
+    val detector = com.n0va.detection.detection.TFLiteDetector(getApplication(), modelManager)
+
+    // ── 模型切换（取 modelManager 中的值） ──
+    private val _activeModelIndex = MutableStateFlow(0)
     val activeModelIndex: StateFlow<Int> = _activeModelIndex.asStateFlow()
 
     val activeModelName: String
-        get() = TFLiteDetector.activeModelName
-
-    // ── 检测器 ──
-    val detector = TFLiteDetector(getApplication())
+        get() = modelManager.activeModelName
 
     var cameraFrameW = 640
     var cameraFrameH = 480
 
     // ── 异步推理 ──
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
-    private val latestFrame = AtomicReference<ByteArray?>(null)
-    private var infFrameW = 0
-    private var infFrameH = 0
-    private var infRotation = 0
+    /** 不可变帧数据，保证尺寸/旋转/数据三字段原子性 */
+    data class FrameData(
+        val nv21: ByteArray,
+        val w: Int,
+        val h: Int,
+        val rotation: Int
+    )
+
+    private val latestFrame = AtomicReference<FrameData?>(null)
     @Volatile
     private var running = false
     private var processingJob: Job? = null
@@ -282,7 +333,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     // 使用叠加录像（带检测框）
                     cm.startOverlayRecording(file, cm.frameW, cm.frameH)
                     // 启动协程持续传输检测结果到编码器
-                    overlayDetectJob = scope.launch {
+                    overlayDetectJob = viewModelScope.launch {
                         while (isActive && cm.isRecording) {
                             val dets = _detections.value
                             if (dets.isNotEmpty()) {
@@ -308,7 +359,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var saveFrameNv21: ByteArray? = null
     private var saveFrameW = 0
     private var saveFrameH = 0
-    private var autoSaveStreak = 0  // 连续检测到目标类别的帧数
     private var lastAutoSaveMs = 0L  // 上次自动保存时间戳
 
     private val frameTimestamps = LongArray(30)
@@ -323,13 +373,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadModel() {
-        scope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 addCameraLog("加载 TFLite 模型...", isSystem = true)
-                TFLiteDetector.loadCustomModels(getApplication())
-                detector.load(TFLiteDetector.activeModelIndex)
+                modelManager.loadCustomModels()
+                detector.load(modelManager.activeModelIndex)
                 _modelLoaded.value = true
-                _activeModelIndex.value = TFLiteDetector.activeModelIndex
+                _activeModelIndex.value = modelManager.activeModelIndex
                 addCameraLog("TFLite 就绪: ${TFLiteDetector.numClasses}类 (${TFLiteDetector.usedDevice})", isSystem = true)
             } catch (e: Exception) {
                 Log.e(TAG, "模型加载失败", e)
@@ -361,6 +411,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun forceStopDetection() {
         running = false
+        latestFrame.set(null)
         _isDetecting.value = false
         _detections.value = emptyList()
         _fps.value = 0
@@ -385,7 +436,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _detections.value = emptyList()
             _fps.value = 0
             running = true
-            scope.launch { inferenceLoop() }
+            viewModelScope.launch { inferenceLoop() }
             addCameraLog("TFLite 检测开始 (${TFLiteDetector.usedDevice})", isSystem = true)
         } else {
             forceStopDetection()
@@ -420,15 +471,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun submitFrame(nv21: ByteArray, w: Int, h: Int, rotation: Int, _timestamp: Long) {
+        // 推流：独立于检测状态，只要开启了推流就缓存最新帧
+        if (_isStreaming.value) {
+            val data = ByteArray(nv21.size).also { System.arraycopy(nv21, 0, it, 0, nv21.size) }
+            latestNv21 = data
+            latestNv21W = w
+            latestNv21H = h
+        }
+
         if (!running) return
         val data = ByteArray(nv21.size).also { System.arraycopy(nv21, 0, it, 0, nv21.size) }
         saveFrameNv21 = data
         saveFrameW = w
         saveFrameH = h
-        infFrameW = w
-        infFrameH = h
-        infRotation = rotation
-        latestFrame.set(data)
+        latestFrame.set(FrameData(data, w, h, rotation))
         // 缓存最新帧用于推流
         if (_isStreaming.value) {
             latestNv21 = data
@@ -439,13 +495,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun inferenceLoop() = withContext(Dispatchers.Default) {
         while (isActive && running) {
-            val data = latestFrame.getAndSet(null)
-            if (data == null) { delay(1); continue }
+            val frame = latestFrame.getAndSet(null)
+            if (frame == null) { delay(1); continue }
             if (!running) continue  // 停止后丢弃已入队的帧
 
-            val w = infFrameW; val h = infFrameH
-            val rotation = infRotation
-            val results = detector.detectFromNV21(data, w, h, rotation)
+            val w = frame.w; val h = frame.h
+            val results = detector.detectFromNV21(frame.nv21, w, h, frame.rotation)
 
             // 停止检测后丢弃结果
             if (!running) continue
@@ -454,7 +509,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             _detections.value = results
             // 检测帧旋转后坐标基于旋转后的尺寸，交换 w/h 以匹配
-            if (rotation == 90 || rotation == 270) {
+            if (frame.rotation == 90 || frame.rotation == 270) {
                 _frameW.value = h; _frameH.value = w
             } else {
                 _frameW.value = w; _frameH.value = h
@@ -468,17 +523,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         val now = System.currentTimeMillis()
                         if (now - lastAutoSaveMs >= 1000) {
                             lastAutoSaveMs = now
-                            autoSaveStreak = 0
                             saveCurrentFrame()
                         }
-                    } else {
-                        autoSaveStreak = 0
                     }
-                } else {
-                    autoSaveStreak = 0
                 }
-            } else {
-                autoSaveStreak = 0
             }
             if (results.isNotEmpty()) {
                 val now = dateFmt.format(Date())
@@ -495,18 +543,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val dets = _detections.value
         if (dets.isEmpty()) return
 
-        scope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             try {
                 val nv21 = saveFrameNv21 ?: return@launch
                 val w = saveFrameW
                 val h = saveFrameH
-                val rot = infRotation
 
-                // NV21 → Bitmap
-                val yuv = android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, w, h, null)
-                val out = java.io.ByteArrayOutputStream()
-                yuv.compressToJpeg(android.graphics.Rect(0, 0, w, h), 100, out)
-                var bitmap = BitmapFactory.decodeByteArray(out.toByteArray(), 0, out.size()) ?: return@launch
+                // NV21 → Bitmap（直接转换，跳过冗余的 JPEG 编解码）
+                var bitmap = nv21ToBitmap(nv21, w, h)
+
+                // 使用 AtomicReference 中的旋转值
+                val latest = latestFrame.get()
+                val rot = latest?.rotation ?: 0
 
                 // 旋转与屏幕方向一致
                 if (rot != 0) {
@@ -517,16 +565,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 // 画检测框（始终绘制，不受录制开关影响）
                 Log.d(TAG, "保存帧: drawBoxes=true, dets=${dets.size}")
                 val canvas = android.graphics.Canvas(bitmap)
-                val boxPaint = android.graphics.Paint().apply {
-                    color = android.graphics.Color.GREEN
-                    strokeWidth = 5f
-                    style = android.graphics.Paint.Style.STROKE
-                }
-                val labelPaint = android.graphics.Paint().apply {
-                    color = android.graphics.Color.GREEN
-                    textSize = 38f
-                    style = android.graphics.Paint.Style.FILL
-                }
                 for (det in dets) {
                     val left = (det.cx - det.w / 2f) * bitmap.width
                     val top = (det.cy - det.h / 2f) * bitmap.height
@@ -540,16 +578,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     if (kpts != null && kpts.size == 17) {
                         val bw = bitmap.width.toFloat()
                         val bh = bitmap.height.toFloat()
-                        val skelPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                            color = android.graphics.Color.argb(180, 0, 255, 100)
-                            style = android.graphics.Paint.Style.STROKE
-                            strokeWidth = 3f
-                            strokeCap = android.graphics.Paint.Cap.ROUND
-                        }
-                        val kptPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-                            color = android.graphics.Color.GREEN
-                            style = android.graphics.Paint.Style.FILL
-                        }
                         for (edge in com.n0va.detection.detection.PoseConstants.SKELETON) {
                             val p1 = kpts[edge[0]]
                             val p2 = kpts[edge[1]]
@@ -620,7 +648,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun loadImage(uri: Uri) {
-        scope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 addFileLog("加载图片...", isSystem = true)
                 val ctx = getApplication<Application>()
@@ -643,7 +671,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun processVideo(uri: Uri) {
-        processingJob = scope.launch {
+        processingJob = viewModelScope.launch(Dispatchers.Default) {
             try {
                 _isProcessing.value = true
                 _detections.value = emptyList()
@@ -738,7 +766,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ── 记录管理 ──
 
     fun loadSavedImages() {
-        scope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val ctx = getApplication<Application>()
             val dir = java.io.File(ctx.filesDir, "MIRO")
             if (!dir.exists()) { _savedImages.value = emptyList(); return@launch }
@@ -773,7 +801,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteSavedImage(uri: Uri) {
-        scope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val file = java.io.File(uri.path ?: "")
                 if (file.exists()) file.delete()
@@ -883,18 +911,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // ── 模型切换 ──
     fun switchModel(index: Int) {
-        if (index < 0 || index >= TFLiteDetector.availableModels.size) return
-        if (index == TFLiteDetector.activeModelIndex) return
+        if (index < 0 || index >= modelManager.availableModels.size) return
+        if (index == modelManager.activeModelIndex) return
 
         // 停止检测
         if (_isDetecting.value) forceStopDetection()
 
-        val modelName = TFLiteDetector.availableModels[index].name
+        val modelName = modelManager.availableModels[index].name
         addCameraLog("切换模型: $modelName...", isSystem = true)
 
         _isSwitchingModel.value = true
 
-        scope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             try {
                 detector.close()
                 detector.load(index)
@@ -915,7 +943,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ── 导入自定义模型 ──
 
     fun importModel(uri: Uri, context: Context) {
-        scope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 addCameraLog("正在导入模型...", isSystem = true)
 
@@ -1012,10 +1040,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun confirmImport(name: String, labelsStr: String) {
         val pending = _pendingImport.value ?: return
         _pendingImport.value = null
-        val ctx = getApplication<Application>()
         val displayName = name.ifBlank { "Custom ${pending.inputSize}" }
-        TFLiteDetector.addCustomModel(
-            context = ctx,
+        modelManager.addCustomModel(
             name = displayName,
             tflitePath = pending.srcPath,
             labelsStr = labelsStr,
@@ -1035,30 +1061,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteCustomModel(index: Int) {
-        val ctx = getApplication<Application>()
-        val name = TFLiteDetector.availableModels.getOrNull(index)?.name ?: return
-        val wasActive = index == TFLiteDetector.activeModelIndex
-        TFLiteDetector.removeCustomModel(ctx, index)
-        _activeModelIndex.value = TFLiteDetector.activeModelIndex
+        val name = modelManager.availableModels.getOrNull(index)?.name ?: return
+        val wasActive = index == modelManager.activeModelIndex
+        modelManager.removeCustomModel(index)
+        _activeModelIndex.value = modelManager.activeModelIndex
         addCameraLog("模型已删除: $name", isSystem = true)
         // 如果删的是当前模型，重新加载
-        if (wasActive && TFLiteDetector.availableModels.isNotEmpty()) {
-            scope.launch {
+        if (wasActive && modelManager.availableModels.isNotEmpty()) {
+            viewModelScope.launch(Dispatchers.Default) {
                 detector.close()
-                detector.load(TFLiteDetector.activeModelIndex)
+                detector.load(modelManager.activeModelIndex)
                 _modelLoaded.value = true
             }
         }
     }
 
     fun editCustomModel(index: Int, name: String, labels: String) {
-        val ctx = getApplication<Application>()
-        TFLiteDetector.editCustomModel(ctx, index, name, labels)
-        _activeModelIndex.value = TFLiteDetector.activeModelIndex
+        modelManager.editCustomModel(index, name, labels)
+        _activeModelIndex.value = modelManager.activeModelIndex
         addCameraLog("模型已更新: $name", isSystem = true)
         // 如果更新的是当前模型，重新加载标签
-        if (index == TFLiteDetector.activeModelIndex) {
-            scope.launch {
+        if (index == modelManager.activeModelIndex) {
+            viewModelScope.launch(Dispatchers.Default) {
                 detector.close()
                 detector.load(index)
                 _modelLoaded.value = true
@@ -1071,7 +1095,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         stopStreaming()
         running = false
         processingJob?.cancel()
-        scope.cancel()
         detector.close()
         super.onCleared()
     }

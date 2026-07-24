@@ -23,10 +23,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.n0va.detection.detection.TFLiteDetector
 import com.n0va.detection.ui.components.PageHeader
 import com.n0va.detection.ui.theme.LocalTheme
-import java.io.File
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -54,6 +52,9 @@ fun SettingsTab(
     onResetSettings: () -> Unit = {},
     onDeleteModel: (Int) -> Unit = {},
     onEditModel: (Int, String, String) -> Unit = { _, _, _ -> },
+    isCustomModel: (Int) -> Boolean = { false },
+    getModelLabels: (Int) -> String = { "" },
+    modelInputSize: Int = 640,
     webcamPort: String = "8080",
     onWebcamPortChange: (String) -> Unit = {},
     webcamQuality: Int = 80,
@@ -82,7 +83,7 @@ fun SettingsTab(
                     SectionHeader("模型选择", t.textSecondary)
                     Card(t.cardBg) {
                         availableModels.forEachIndexed { i, name ->
-                            val isCustom = TFLiteDetector.availableModels.getOrNull(i)?.isCustom ?: false
+                            val isCustom = isCustomModel(i)
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
@@ -334,9 +335,9 @@ fun SettingsTab(
                 Card(t.cardBg) {
                     InfoRow("版本", "0.3.0", t.textSecondary, t.textPrimary)
                     Spacer(Modifier.height(10.dp))
-                    InfoRow("模型", if (modelLoaded) "${TFLiteDetector.activeModelName}" else "—", t.textSecondary, t.textPrimary)
+                    InfoRow("模型", if (modelLoaded) availableModels.getOrNull(activeModelIndex) ?: "—" else "—", t.textSecondary, t.textPrimary)
                     Spacer(Modifier.height(10.dp))
-                    InfoRow("推理尺寸", if (modelLoaded) "${TFLiteDetector.availableModels.getOrNull(activeModelIndex)?.inputSize ?: 640}×${TFLiteDetector.availableModels.getOrNull(activeModelIndex)?.inputSize ?: 640}" else "—", t.textSecondary, t.textPrimary)
+                    InfoRow("推理尺寸", if (modelLoaded) "${modelInputSize}×${modelInputSize}" else "—", t.textSecondary, t.textPrimary)
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -359,14 +360,16 @@ fun SettingsTab(
 
         // ── 编辑窗口 ──
         if (editTarget != null) {
+            val idx = editTarget!!
             EditModelDialog(
-                index = editTarget!!,
+                modelName = availableModels.getOrNull(idx) ?: "模型",
+                modelLabels = getModelLabels(idx),
                 isDark = isDarkTheme,
-                onSave = { idx, name, labels ->
+                onSave = { name, labels ->
                     onEditModel(idx, name, labels)
                     editTarget = null
                 },
-                onDelete = { idx ->
+                onDelete = {
                     onDeleteModel(idx)
                     editTarget = null
                 },
@@ -380,16 +383,15 @@ fun SettingsTab(
 
 @Composable
 private fun EditModelDialog(
-    index: Int,
+    modelName: String,
+    modelLabels: String,
     isDark: Boolean,
-    onSave: (Int, String, String) -> Unit,
-    onDelete: (Int) -> Unit,
+    onSave: (String, String) -> Unit,
+    onDelete: () -> Unit,
     onCancel: () -> Unit
 ) {
-    val info = TFLiteDetector.availableModels.getOrNull(index) ?: run { onCancel(); return }
-    val origLabels = remember(info) {
-        try { File(info.labelsFile).readLines().map { it.trim() }.filter { it.isNotEmpty() } }
-        catch (_: Exception) { emptyList() }
+    val origLabels = remember(modelLabels) {
+        modelLabels.lines().map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("object") }
     }
     val numClasses = origLabels.size
 
@@ -400,7 +402,7 @@ private fun EditModelDialog(
     val textSecondary = if (isDark) Color(0xFFAAAAAA) else Color(0xFF666666)
     val textDim = if (isDark) Color(0xFF666666) else Color(0xFF999999)
 
-    var modelName by remember { mutableStateOf(info.name) }
+    var modelNameState by remember { mutableStateOf(modelName) }
     val labelValues = remember {
         mutableStateListOf<String>().apply {
             val count = if (numClasses > 0) numClasses else 1
@@ -437,13 +439,13 @@ private fun EditModelDialog(
                         .padding(horizontal = 12.dp, vertical = 5.dp)
                 ) {
                     BasicTextField(
-                        value = modelName, onValueChange = { modelName = it },
+                        value = modelNameState, onValueChange = { modelNameState = it },
                         singleLine = true,
                         textStyle = LocalTextStyle.current.copy(fontSize = 13.sp, color = textPrimary),
                         cursorBrush = SolidColor(Color(0xFF07C160)),
                         modifier = Modifier.fillMaxWidth(),
                         decorationBox = { inner ->
-                            Box { if (modelName.isEmpty()) Text("模型名称", color = textDim, fontSize = 13.sp); inner() }
+                            Box { if (modelNameState.isEmpty()) Text("模型名称", color = textDim, fontSize = 13.sp); inner() }
                         }
                     )
                 }
@@ -485,15 +487,15 @@ private fun EditModelDialog(
             Spacer(Modifier.height(12.dp))
             HorizontalDivider(color = divider, thickness = 0.5.dp)
             Row(modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = { onDelete(index) }, modifier = Modifier.weight(1f).height(48.dp)) {
+                TextButton(onClick = onDelete, modifier = Modifier.weight(1f).height(48.dp)) {
                     Text("删除", color = Color(0xFFFF4444), fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 }
                 Box(Modifier.width(0.5.dp).height(48.dp).background(divider))
                 TextButton(
                     onClick = {
-                        val name = modelName.ifBlank { info.name }
+                        val name = modelNameState.ifBlank { modelName }
                         val labels = classLabels.mapIndexed { i, def -> labelValues[i].ifBlank { def } }.joinToString(",")
-                        onSave(index, name, labels)
+                        onSave(name, labels)
                     },
                     modifier = Modifier.weight(1f).height(48.dp)
                 ) {

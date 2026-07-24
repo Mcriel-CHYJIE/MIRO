@@ -2,11 +2,9 @@ package com.n0va.detection.detection
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.util.Log
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.gpu.GpuDelegate
-import org.tensorflow.lite.nnapi.NnApiDelegate
 import java.io.File
 import java.io.FileInputStream
 import java.nio.ByteBuffer
@@ -18,42 +16,18 @@ import kotlin.math.min
 import kotlin.math.max
 
 /**
- * TFLite YOLO 检测器，支持 GPU / NNAPI / CPU 三级加速。
+ * TFLite YOLO 检测器，支持 GPU / CPU 两级加速。
  *
  * 同时支持两种输出格式：
  *   1）NMS 后处理格式 [1, 300, 6] — x1,y1,x2,y2,conf,cls（如 YOLO26n）
  *   2）原始 YOLO 格式 [1, 4+num_classes, total_cells] — 需 decode + NMS（如 YOLO11n）
  */
 class TFLiteDetector(
-    private val context: Context
+    private val context: Context,
+    private val modelManager: ModelManager
 ) {
     companion object {
         private const val TAG = "TFLiteDetector"
-
-        data class ModelInfo(
-            val name: String,
-            val tfliteFile: String,
-            val labelsFile: String,
-            val inputSize: Int,
-            val isRawYolo: Boolean = false,   // true = [1, 4+cls, N] 原始输出
-            val isPose: Boolean = false,      // true = 姿态模型 [1, 56, N]
-            val isCustom: Boolean = false,    // true = 用户导入的自定义模型
-            val customTflitePath: String? = null // 自定义模型的绝对路径
-        )
-
-        val availableModels = mutableListOf(
-            ModelInfo("YOLO26n 640", "model/yolo26n_float32.tflite", "model/coco_classes.txt", 640),
-            ModelInfo("Pose 11n 640", "model/yolo11n-pose.tflite", "model/pose_classes.txt", 640, isRawYolo = true, isPose = true),
-        )
-
-        private val currentModelInfo: ModelInfo
-            get() = availableModels.getOrElse(activeModelIndex) { availableModels[0] }
-
-        var activeModelIndex = 0
-            private set
-
-        val activeModelName: String
-            get() = currentModelInfo.name
 
         var confThreshold = 0.25f
         var iouThreshold = 0.45f
@@ -66,124 +40,10 @@ class TFLiteDetector(
             private set
         var labels: List<String> = emptyList()
             private set
-
-        /**
-         * 添加用户导入的自定义模型。
-         * @param context Android 上下文
-         * @param name 模型显示名称
-         * @param tflitePath 源 .tflite 文件路径（将被复制到内部存储）
-         * @param labelsStr 标签文本（每行一个类别，或逗号分隔）
-         * @param inputSize 模型输入尺寸（如 640）
-         * @param classes 类别数（>0 = 原始 YOLO 格式，0 = NMS 后处理格式）
-         * @param isPose 是否为姿态模型
-         */
-        fun addCustomModel(context: Context, name: String, tflitePath: String, labelsStr: String, inputSize: Int, classes: Int, isPose: Boolean = false) {
-            val modelsDir = File(context.filesDir, "models")
-            modelsDir.mkdirs()
-
-            // 写入标签文件
-            val labelsFile = File(modelsDir, "${name}_labels.txt")
-            val labelLines = labelsStr.split(Regex("[,\n]")).map { it.trim() }.filter { it.isNotEmpty() }
-            labelsFile.writeText(if (labelLines.isNotEmpty()) labelLines.joinToString("\n") else labelsStr)
-
-            // 复制 .tflite 文件
-            val srcFile = File(tflitePath)
-            val destFile = File(modelsDir, "${name}.tflite")
-            if (tflitePath.isNotEmpty()) {
-                srcFile.copyTo(destFile, overwrite = true)
-            }
-            if (!destFile.exists()) {
-                Log.w(TAG, "模型文件不存在: ${destFile.absolutePath}")
-                return
-            }
-
-            // 判断格式：classes > 0 表示原始 YOLO（ultralytics 导出格式），classes == 0 表示 NMS 格式
-            val isRawYolo = classes > 0
-
-            availableModels.add(ModelInfo(
-                name = name,
-                tfliteFile = destFile.absolutePath,
-                labelsFile = labelsFile.absolutePath,
-                inputSize = inputSize,
-                isRawYolo = isRawYolo,
-                isPose = isPose,
-                isCustom = true,
-                customTflitePath = destFile.absolutePath
-            ))
-            Log.i(TAG, "自定义模型已添加: $name ($inputSize, ${if (isRawYolo) "原始YOLO" else "NMS后处理"}, ${if (isPose) "姿态" else "检测"})")
-            saveCustomModels(context)
-        }
-
-        /** 编辑自定义模型（名称+标签） */
-        fun editCustomModel(context: Context, index: Int, newName: String, labelsStr: String) {
-            val info = availableModels.getOrNull(index) ?: return
-            if (!info.isCustom) return
-            val labelLines = labelsStr.split(Regex("[,\n]")).map { it.trim() }.filter { it.isNotEmpty() }
-            try { File(info.labelsFile).writeText(labelLines.joinToString("\n")) } catch (_: Exception) {}
-            availableModels[index] = info.copy(name = newName)
-            saveCustomModels(context)
-        }
-
-        /** 删除自定义模型 */
-        fun removeCustomModel(context: Context, index: Int) {
-            val info = availableModels.getOrNull(index) ?: return
-            if (!info.isCustom) return
-            try { File(info.customTflitePath ?: info.tfliteFile).delete() } catch (_: Exception) {}
-            try { File(info.labelsFile).delete() } catch (_: Exception) {}
-            availableModels.removeAt(index)
-            if (activeModelIndex >= availableModels.size) {
-                activeModelIndex = (availableModels.size - 1).coerceAtLeast(0)
-            } else if (index < activeModelIndex) {
-                activeModelIndex--
-            }
-            saveCustomModels(context)
-        }
-
-        /** 持久化自定义模型列表到 SharedPreferences */
-        fun saveCustomModels(context: Context) {
-            val prefs = context.getSharedPreferences("miro_custom_models", Context.MODE_PRIVATE)
-            val arr = org.json.JSONArray()
-            for (m in availableModels) {
-                if (!m.isCustom || m.customTflitePath == null) continue
-                val labels = try { File(m.labelsFile).readText() } catch (_: Exception) { "" }
-                val numClasses = labels.lines().filter { it.isNotBlank() }.size
-                val obj = org.json.JSONObject().apply {
-                    put("name", m.name)
-                    put("labels", labels)
-                    put("inputSize", m.inputSize)
-                    put("classes", numClasses)
-                    put("isPose", m.isPose)
-                }
-                arr.put(obj)
-            }
-            prefs.edit().putString("models_json", arr.toString()).apply()
-        }
-
-        /** 从 SharedPreferences 恢复自定义模型 */
-        fun loadCustomModels(context: Context) {
-            val prefs = context.getSharedPreferences("miro_custom_models", Context.MODE_PRIVATE)
-            val json = prefs.getString("models_json", null) ?: return
-            try {
-                val arr = org.json.JSONArray(json)
-                for (i in 0 until arr.length()) {
-                    val obj = arr.getJSONObject(i)
-                    addCustomModel(
-                        context = context,
-                        name = obj.getString("name"),
-                        tflitePath = "",
-                        labelsStr = obj.optString("labels", ""),
-                        inputSize = obj.optInt("inputSize", 640),
-                        classes = if (obj.optBoolean("isPose", false)) 0 else obj.optInt("classes", 0),
-                        isPose = obj.optBoolean("isPose", false)
-                    )
-                }
-            } catch (_: Exception) {}
-        }
     }
 
     private var interpreter: Interpreter? = null
     private var gpuDelegate: GpuDelegate? = null
-    private var nnApiDelegate: NnApiDelegate? = null
 
     // ── 输入缓存 ──
     private var inputBuffer: ByteBuffer? = null
@@ -194,19 +54,19 @@ class TFLiteDetector(
     private var outputBufferRaw: Array<Array<FloatArray>>? = null    // [1][C][N]
 
     // ── 当前模型信息 ──
-    private var currentModelFile: String = availableModels[0].tfliteFile
-    private var currentLabelsFile: String = availableModels[0].labelsFile
-    private var currentInputSize: Int = availableModels[0].inputSize
-    private var currentIsRawYolo: Boolean = availableModels[0].isRawYolo
-    private var currentIsPose: Boolean = availableModels[0].isPose
-    private var currentIsCustom: Boolean = availableModels[0].isCustom
-    private var currentCustomTflitePath: String? = availableModels[0].customTflitePath
+    private var currentModelFile: String = modelManager.availableModels[0].tfliteFile
+    private var currentLabelsFile: String = modelManager.availableModels[0].labelsFile
+    private var currentInputSize: Int = modelManager.availableModels[0].inputSize
+    private var currentIsRawYolo: Boolean = modelManager.availableModels[0].isRawYolo
+    private var currentIsPose: Boolean = modelManager.availableModels[0].isPose
+    private var currentIsCustom: Boolean = modelManager.availableModels[0].isCustom
+    private var currentCustomTflitePath: String? = modelManager.availableModels[0].customTflitePath
 
     // ── 加载 ──
 
     fun load(modelIndex: Int = 0) {
-        activeModelIndex = modelIndex
-        val model = availableModels.getOrElse(modelIndex) { availableModels[0] }
+        val model = modelManager.availableModels.getOrElse(modelIndex) { modelManager.availableModels[0] }
+        modelManager.activeModelIndex = modelIndex
         currentModelFile = model.tfliteFile
         currentLabelsFile = model.labelsFile
         currentInputSize = model.inputSize
@@ -272,7 +132,7 @@ class TFLiteDetector(
         try {
             val gpuOptions = org.tensorflow.lite.gpu.GpuDelegateFactory.Options().apply {
                 inferencePreference = org.tensorflow.lite.gpu.GpuDelegateFactory.Options.INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER
-                setPrecisionLossAllowed(true)  // fp16 加速，RTX 5070 Ti 完全支持
+                setPrecisionLossAllowed(true)  // fp16 加速
             }
             val gpu = org.tensorflow.lite.gpu.GpuDelegate(gpuOptions)
             options.addDelegate(gpu)
@@ -281,7 +141,7 @@ class TFLiteDetector(
             gpuAttempted = true
             usedDevice = "GPU"
             Log.i(TAG, "GPU delegate added.")
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "GPU unavailable: ${e.message}")
             gpuDelegate = null
             usedDevice = "CPU"
@@ -289,7 +149,7 @@ class TFLiteDetector(
 
         try {
             return Interpreter(model, options)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             if (gpuAttempted) {
                 // GPU delegate 不兼容 → 关闭 GPU 用 CPU 重试
                 Log.w(TAG, "GPU delegate incompatible, falling back to CPU: ${e.message}")
@@ -329,33 +189,34 @@ class TFLiteDetector(
 
     fun detectFromNV21(nv21: ByteArray, imgW: Int, imgH: Int, rotationDeg: Int = 0): List<DetectionResult> {
         if (!isLoaded) return emptyList()
-        val yuv = android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, imgW, imgH, null)
-        val out = java.io.ByteArrayOutputStream()
-        yuv.compressToJpeg(android.graphics.Rect(0, 0, imgW, imgH), 80, out)
-        val jpegData = out.toByteArray()
-        var bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.size)
-        // 竖屏时相机输出仍为横屏（rotationDeg=90/270），把图转正再检测
-        if (rotationDeg == 90 || rotationDeg == 270) {
-            val matrix = android.graphics.Matrix()
-            matrix.postRotate(rotationDeg.toFloat())
-            bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-        }
-        val results = detect(bitmap)
-        bitmap.recycle()
-        return results
+        // 直接使用 NV21 预处理路径（支持旋转），跳过冗余的 NV21→JPEG→Bitmap 转换
+        return detectFromNV21Direct(nv21, imgW, imgH, rotationDeg)
     }
 
-    fun detectFromNV21Direct(nv21: ByteArray, imgW: Int, imgH: Int): List<DetectionResult> {
+    /**
+     * 直接的 NV21 检测管线，不经过 JPEG 编解码。
+     * 通过像素级重映射支持旋转，结果坐标系为旋转后的图像空间。
+     */
+    fun detectFromNV21Direct(nv21: ByteArray, imgW: Int, imgH: Int, rotationDeg: Int = 0): List<DetectionResult> {
         if (!isLoaded) return emptyList()
-        val input = preprocessNV21(nv21, imgW, imgH)
-        if (currentIsRawYolo) {
+        val input = preprocessNV21(nv21, imgW, imgH, rotationDeg)
+        // 有效图像尺寸：旋转后宽高互换，postprocess 需要基于此计算 letterbox
+        val rotated = rotationDeg == 90 || rotationDeg == 270
+        val effW = if (rotated) imgH else imgW
+        val effH = if (rotated) imgW else imgH
+
+        return if (currentIsPose) {
             val output = reuseOutputRaw()
             interpreter?.run(input, output)
-            return postprocessRawYolo(output, imgW, imgH)
+            postprocessRawPose(output, effW, effH)
+        } else if (currentIsRawYolo) {
+            val output = reuseOutputRaw()
+            interpreter?.run(input, output)
+            postprocessRawYolo(output, effW, effH)
         } else {
             val output = reuseOutputNMS()
             interpreter?.run(input, output)
-            return postprocess(output[0], imgW, imgH)
+            postprocess(output[0], effW, effH)
         }
     }
 
@@ -417,11 +278,22 @@ class TFLiteDetector(
         return buf
     }
 
-    private fun preprocessNV21(nv21: ByteArray, imgW: Int, imgH: Int): ByteBuffer {
+    /**
+     * 直接 NV21 → 模型输入的预处理，支持旋转。
+     * 通过像素级重映射避免 NV21→JPEG→Bitmap 的冗余转换。
+     * @param rotationDeg 顺时针旋转角度 (0/90/180/270)
+     */
+    private fun preprocessNV21(nv21: ByteArray, imgW: Int, imgH: Int, rotationDeg: Int = 0): ByteBuffer {
         val s = currentInputSize
-        val scale = minOf(s.toFloat() / imgW, s.toFloat() / imgH)
-        val sw = (imgW * scale).toInt()
-        val sh = (imgH * scale).toInt()
+
+        // 旋转后的有效图像尺寸（90°/270° 时宽高互换）
+        val rotated = rotationDeg == 90 || rotationDeg == 270
+        val rW = if (rotated) imgH else imgW
+        val rH = if (rotated) imgW else imgH
+
+        val scale = minOf(s.toFloat() / rW, s.toFloat() / rH)
+        val sw = (rW * scale).toInt()
+        val sh = (rH * scale).toInt()
         val padX = (s - sw) / 2f
         val padY = (s - sh) / 2f
 
@@ -431,19 +303,42 @@ class TFLiteDetector(
         buf.rewind()
         buf.order(ByteOrder.nativeOrder())
 
-        val yStride = imgW
         val uvStart = imgW * imgH
 
         for (outY in 0 until s) {
             for (outX in 0 until s) {
-                val srcX = ((outX - padX) * imgW / sw).toInt().coerceIn(0, imgW - 1)
-                val srcY = ((outY - padY) * imgH / sh).toInt().coerceIn(0, imgH - 1)
+                // 计算在旋转后的图像中的坐标
+                var srcX = ((outX - padX) / scale).toInt()
+                var srcY = ((outY - padY) / scale).toInt()
 
-                val yIdx = srcY * yStride + srcX
+                // 通过重映射将旋转后坐标转回原始 NV21 缓冲坐标
+                when (rotationDeg) {
+                    90 -> {
+                        // CW 90°: destX = imgH-1-srcY, destY = srcX
+                        val tmp = srcX
+                        srcX = srcY
+                        srcY = imgH - 1 - tmp
+                    }
+                    270 -> {
+                        // CCW 90° (CW 270°): destX = srcY, destY = imgW-1-srcX
+                        val tmp = srcX
+                        srcX = imgW - 1 - srcY
+                        srcY = tmp
+                    }
+                    180 -> {
+                        srcX = imgW - 1 - srcX
+                        srcY = imgH - 1 - srcY
+                    }
+                }
+                srcX = srcX.coerceIn(0, imgW - 1)
+                srcY = srcY.coerceIn(0, imgH - 1)
+
+                val yIdx = srcY * imgW + srcX
                 val uvIdx = uvStart + (srcY / 2) * imgW + (srcX / 2) * 2
                 val y = nv21[yIdx].toInt() and 0xFF
-                val u = nv21[uvIdx].toInt() and 0xFF
-                val v = nv21[uvIdx + 1].toInt() and 0xFF
+                // NV21 存储顺序为 V, U（先 V 后 U）
+                val v = nv21[uvIdx].toInt() and 0xFF
+                val u = nv21[uvIdx + 1].toInt() and 0xFF
 
                 val r = (y + 1.402f * (v - 128)).coerceIn(0f, 255f) / 255f
                 val g = (y - 0.344f * (u - 128) - 0.714f * (v - 128)).coerceIn(0f, 255f) / 255f
@@ -654,6 +549,7 @@ class TFLiteDetector(
         for (i in sorted.indices) {
             if (suppressed[i]) continue
             result.add(sorted[i])
+            val areaI = (sorted[i].x2(1f) - sorted[i].x1(1f)) * (sorted[i].y2(1f) - sorted[i].y1(1f))
             for (j in i + 1 until sorted.size) {
                 if (suppressed[j]) continue
                 val ix1 = maxOf(sorted[i].x1(1f), sorted[j].x1(1f))
@@ -663,7 +559,6 @@ class TFLiteDetector(
                 val iw = (ix2 - ix1).coerceAtLeast(0f)
                 val ih = (iy2 - iy1).coerceAtLeast(0f)
                 val inter = iw * ih
-                val areaI = (sorted[i].x2(1f) - sorted[i].x1(1f)) * (sorted[i].y2(1f) - sorted[i].y1(1f))
                 val areaJ = (sorted[j].x2(1f) - sorted[j].x1(1f)) * (sorted[j].y2(1f) - sorted[j].y1(1f))
                 val union = areaI + areaJ - inter
                 if (union > 0f && inter / union > iouThreshold) suppressed[j] = true
@@ -676,12 +571,10 @@ class TFLiteDetector(
     // ── 释放 ──
 
     fun close() {
-        try { nnApiDelegate?.close() } catch (_: Exception) {}
         try { gpuDelegate?.close() } catch (_: Exception) {}
         try { interpreter?.close() } catch (_: Exception) {}
         interpreter = null
         gpuDelegate = null
-        nnApiDelegate = null
         inputBuffer = null
         pixelBuffer = null
         outputBufferNMS = null
